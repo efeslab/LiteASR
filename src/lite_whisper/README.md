@@ -1,0 +1,1 @@
+Modeling and configuration scripts to upload LiteASR-compressed Whisper models to HuggingFace Hub.

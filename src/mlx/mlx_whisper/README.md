@@ -1,0 +1,1 @@
+The code in this directory is adopted from the [mlx-examples](https://github.com/ml-explore/mlx-examples/tree/main/whisper/mlx_whisper).

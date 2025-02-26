@@ -1,0 +1,1 @@
+The code in this directory is adopted from [`openai/whisper`](https://github.com/openai/whisper) with hooks to record activation values during calibration phase.
