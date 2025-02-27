@@ -72,7 +72,7 @@ To compress the model by yourself, use [`src/compress.py`](./src/compile.py). Ex
 python src/compress.py --base_model turbo --low_rank --rank_threshold 0.99:0.999 --save_weight
 ```
 
-You can tweak `--rank_threshold` argument to explore the balance the size and accuracy trade-off.
+You can tweak `--rank_threshold` argument to explore the size and accuracy trade-off.
 
 ## Motivations and Methodology
 
