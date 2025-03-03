@@ -1,11 +1,11 @@
 # LiteASR: Efficient Automatic Speech Recognition with Low-Rank Approximation
-[![arXiv](https://img.shields.io/badge/arXiv-2502.XXXXX-b31b1b.svg)](https://arxiv.org/abs/2502.XXXXX)
+[![arXiv](https://img.shields.io/badge/arXiv-2502.20583-b31b1b.svg)](https://arxiv.org/abs/2502.20583)
 [![Hugging Face](https://img.shields.io/badge/🤗%20Hugging%20Face-lite--whisper--large--v3--turbo-yellow)](https://huggingface.co/efficient-speech/lite-whisper-large-v3-turbo)
 [![Hugging Face](https://img.shields.io/badge/🤗%20Hugging%20Face-lite--whisper--large--v3-yellow)](https://huggingface.co/efficient-speech/lite-whisper-large-v3)
 
 LiteASR is a compression scheme for automatic speech recognition (ASR) models that leverages the _low-rank_ properties of activation values. Our method can compress OpenAI's Whisper encoder by up to **~50%**.
 
-This repository contains the code for compressing the models and running inference. For technical details, take a look at our [preprint]().
+This repository contains the code for compressing the models and running inference. For technical details, take a look at our [preprint](https://arxiv.org/abs/2502.20583).
 
 ![](./assets/pareto.png)
 
@@ -90,7 +90,7 @@ Compounding these challenges, Whisper models require fixed-length inputs (30 sec
 
 LiteASR addresses these limitations by fundamentally reducing the computational requirements of ASR encoders. Our approach is based on a key insight: we observed consistent low-rank structures in activation values during inference across diverse inputs. This property enables us to approximate activation values as products of low-rank matrices, which in turn allows us to represent weight matrices as chains of computationally efficient low-rank matrix multiplications.
 
-The simplified visualization below illustrates our core concept. For a more comprehensive technical explanation, please refer to our [paper]().
+The simplified visualization below illustrates our core concept. For a more comprehensive technical explanation, please refer to our [paper](https://arxiv.org/abs/2502.20583).
 
 ![](./assets/idea.png)
 
@@ -114,7 +114,7 @@ Here is the average word error rate (WER) evaluated on the [ESB datasets](https:
 | &nbsp; | &nbsp; | &nbsp; | &nbsp; |
 | [whisper-medium](https://huggingface.co/openai/whisper-medium) | 14.8 | 306M | 457M |
 
-See [our paper]() for more evaluation results.
+See [our paper](https://arxiv.org/abs/2502.20583) for more evaluation results.
 
 ## Acknowledgement
 
@@ -127,4 +127,13 @@ See [our paper]() for more evaluation results.
 If you use LiteASR in your research, please cite the following paper:
 
 ```
+@misc{kamahori2025liteasrefficientautomaticspeech,
+      title={LiteASR: Efficient Automatic Speech Recognition with Low-Rank Approximation}, 
+      author={Keisuke Kamahori and Jungo Kasai and Noriyuki Kojima and Baris Kasikci},
+      year={2025},
+      eprint={2502.20583},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2502.20583}, 
+}
 ```
