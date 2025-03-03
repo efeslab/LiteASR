@@ -10,7 +10,7 @@ from mlx.utils import tree_unflatten
 import torch 
 
 from . import whisper
-from convert import hf_to_pt
+from .convert import hf_to_pt
 
 def load_model(
     path_or_hf_repo: str,
