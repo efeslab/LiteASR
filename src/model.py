@@ -186,10 +186,13 @@ class MultiHeadAttention(nn.Module):
             if is_prefilling:
                 kv_cache["self-key"][:, offset : offset + x.shape[1]].copy_(k)
                 kv_cache["self-value"][:, offset : offset + x.shape[1]].copy_(v)
+                sliced_mask = mask[offset : offset + x.shape[1], :]
             else:
                 fill_kv_cache_triton(kv_cache["self-key"], kv_cache["self-value"], k, v, offset)
+                sliced_mask = torch.zeros(q.shape[1], mask.shape[1], device=q.device, dtype=q.dtype)
+                triton_index_select_single_row(mask, sliced_mask, offset)
 
-            wv, qk = self.qkv_attention(q, kv_cache["self-key"], kv_cache["self-value"], mask=mask)
+            wv, qk = self.qkv_attention(q, kv_cache["self-key"], kv_cache["self-value"], mask=sliced_mask)
         
         else:
             # for decoder cross-attention
@@ -224,19 +227,20 @@ class MultiHeadAttention(nn.Module):
 
         if SDPA_AVAILABLE and MultiHeadAttention.use_sdpa:
             a = scaled_dot_product_attention(
-                q, k, v, is_causal=mask is not None and n_ctx > 1
+                q, k, v, attn_mask=mask,
             )
             out = a.permute(0, 2, 1, 3).flatten(start_dim=2)
             qk = None
         else:
-            qk = (q * scale) @ (k * scale).transpose(-1, -2)
-            if mask is not None:
-                qk = qk + mask[:n_ctx, :n_ctx]
-            qk = qk.float()
+            raise NotImplementedError("Use SDPA implementation")
+            # qk = (q * scale) @ (k * scale).transpose(-1, -2)
+            # if mask is not None:
+            #     qk = qk + mask[:n_ctx, :n_ctx]
+            # qk = qk.float()
 
-            w = F.softmax(qk, dim=-1).to(q.dtype)
-            out = (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
-            qk = qk.detach()
+            # w = F.softmax(qk, dim=-1).to(q.dtype)
+            # out = (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
+            # qk = qk.detach()
 
         return out, qk
 
@@ -414,11 +418,6 @@ class TextDecoder(nn.Module):
             x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
         ).float()
 
-        if is_prefilling:
-            offset.add_(x.shape[1])
-        else:
-            offset.add_(1)
-
         return logits
 
 
@@ -517,6 +516,7 @@ class Whisper(nn.Module):
         encoded = self.encoder.forward(mel)
         
         logits = self.decoder.forward(decoder_input_ids, encoded, self.offset, self.kv_cache, True)
+        self.offset.add_(logits.shape[1])
         next_token = torch.argmax(logits, dim=-1)[:, -1:]
         
         for _ in range(self.dims.n_text_ctx):
@@ -527,5 +527,6 @@ class Whisper(nn.Module):
             
             logits = self.decoder.forward_generation(next_token, encoded, self.offset, self.kv_cache, False)
             next_token = torch.argmax(logits, dim=-1)[:, -1:]
+            self.offset.add_(1)
         
         return ret_tokens
