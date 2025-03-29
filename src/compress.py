@@ -25,17 +25,13 @@ class LinearLowRank(torch.nn.Module):
 def transcribe(
         model,
         path, 
-        padding=None, 
         temperature=0.0,
-        token_list=None, 
     ):
     result = model.transcribe(
         path,
         task="transcribe",
         language="en",
         temperature=temperature,
-        padding=padding,
-        token_list=token_list,
     )
     return result["text"]
 
@@ -44,7 +40,6 @@ def apply_low_rank(model, dataset, rank_threshold):
     base_dim = model.dims.n_audio_state # 1280 for large-v3
     
     for i in tqdm.tqdm(range(len(dataset))):
-        model.encoder.register_audio_feature(None)
         audio = dataset[i]["audio"]["array"].astype(np.float32)
         transcribe(model, audio)
     
@@ -134,9 +129,7 @@ def apply_low_rank(model, dataset, rank_threshold):
             else:
                 bias = Y_mean + (layer.bias.half() - Y_mean) @ V_k @ V_k.T
             
-            new_layer = whisper.model.LinearLowRank(
-                w1, w2, bias
-            )
+            new_layer = LinearLowRank(w1, w2, bias)
 
             if i == 0:
                 model.encoder.blocks[i_layer].attn.query = new_layer
@@ -222,7 +215,6 @@ def main(args):
         sum_wer = 0
         wer_metric = evaluate.load("wer")
         for i in range(len(dataset)):
-            model.encoder.register_audio_feature(None)
             audio = dataset[i]["audio"]["array"].astype(np.float32)
 
             pred = transcribe(model, audio)
