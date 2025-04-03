@@ -211,6 +211,7 @@ def main(args):
         return
 
     # accuracy benchmark
+    total_sum_wer = 0
     for i_bench, dataset in enumerate(eval_dataset_list):
         sum_wer = 0
         wer_metric = evaluate.load("wer")
@@ -231,6 +232,14 @@ def main(args):
             f.write(f"{benchs[i_bench]}\n")
             f.write(f"Average WER: {sum_wer / len(dataset)}\n")
             f.write("=====================================\n")
+        total_sum_wer += sum_wer / len(dataset)
+
+    total_avg_wer = total_sum_wer / len(eval_dataset_list)
+    model_name = ('lite-' if args.low_rank else '') + 'whisper-' + args.base_model + ('-' + args.rank_threshold if args.low_rank else '')
+    with open('output.txt', 'a') as f:
+        f.write(f'Final model evaluation results:\n')
+        f.write(f'max_eval_samples:{args.max_eval_samples} | {model_name} | total_avg_wer: {total_avg_wer} | encoder_params: {sum(p.numel() for p in model.encoder.parameters())} | decoder_params: {sum(p.numel() for p in model.decoder.parameters())}\n')
+
 
 
 if __name__ == "__main__":
@@ -278,3 +287,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args)
+
