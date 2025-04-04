@@ -25,17 +25,13 @@ class LinearLowRank(torch.nn.Module):
 def transcribe(
         model,
         path, 
-        padding=None, 
         temperature=0.0,
-        token_list=None, 
     ):
     result = model.transcribe(
         path,
         task="transcribe",
         language="en",
         temperature=temperature,
-        padding=padding,
-        token_list=token_list,
     )
     return result["text"]
 
@@ -44,7 +40,6 @@ def apply_low_rank(model, dataset, rank_threshold):
     base_dim = model.dims.n_audio_state # 1280 for large-v3
     
     for i in tqdm.tqdm(range(len(dataset))):
-        model.encoder.register_audio_feature(None)
         audio = dataset[i]["audio"]["array"].astype(np.float32)
         transcribe(model, audio)
     
@@ -134,9 +129,7 @@ def apply_low_rank(model, dataset, rank_threshold):
             else:
                 bias = Y_mean + (layer.bias.half() - Y_mean) @ V_k @ V_k.T
             
-            new_layer = whisper.model.LinearLowRank(
-                w1, w2, bias
-            )
+            new_layer = LinearLowRank(w1, w2, bias)
 
             if i == 0:
                 model.encoder.blocks[i_layer].attn.query = new_layer
@@ -218,11 +211,11 @@ def main(args):
         return
 
     # accuracy benchmark
+    total_sum_wer = 0
     for i_bench, dataset in enumerate(eval_dataset_list):
         sum_wer = 0
         wer_metric = evaluate.load("wer")
         for i in range(len(dataset)):
-            model.encoder.register_audio_feature(None)
             audio = dataset[i]["audio"]["array"].astype(np.float32)
 
             pred = transcribe(model, audio)
@@ -239,6 +232,14 @@ def main(args):
             f.write(f"{benchs[i_bench]}\n")
             f.write(f"Average WER: {sum_wer / len(dataset)}\n")
             f.write("=====================================\n")
+        total_sum_wer += sum_wer / len(dataset)
+
+    total_avg_wer = total_sum_wer / len(eval_dataset_list)
+    model_name = ('lite-' if args.low_rank else '') + 'whisper-' + args.base_model + ('-' + args.rank_threshold if args.low_rank else '')
+    with open('output.txt', 'a') as f:
+        f.write(f'Final model evaluation results:\n')
+        f.write(f'max_eval_samples:{args.max_eval_samples} | {model_name} | total_avg_wer: {total_avg_wer} | encoder_params: {sum(p.numel() for p in model.encoder.parameters())} | decoder_params: {sum(p.numel() for p in model.decoder.parameters())}\n')
+
 
 
 if __name__ == "__main__":
@@ -286,3 +287,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args)
+

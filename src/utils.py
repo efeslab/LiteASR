@@ -94,7 +94,7 @@ def upload_to_hf(model_path, repo_name, org_name, base_model="openai/whisper-lar
                 layer.split(".")[-1]: b[f"model.encoder.layers.{i}.{layer}.weight1"].shape[1]
                 for layer in linear_layers
                 if f"model.encoder.layers.{i}.{layer}.weight1" in b
-            } for i in range(len(orig_whisper_config.encoder_layers))
+            } for i in range(orig_whisper_config.encoder_layers)
         ],
         **orig_whisper_config.to_dict(),
     )
@@ -102,3 +102,4 @@ def upload_to_hf(model_path, repo_name, org_name, base_model="openai/whisper-lar
     model.load_state_dict(b)
     model.config._name_or_path = f"{org_name}/{repo_name}"
     model.push_to_hub(f"{org_name}/{repo_name}")
+
