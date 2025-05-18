@@ -197,7 +197,57 @@ def main(args):
                 args.max_eval_samples + args.num_calibration_samples,
             )))
     
-    calibrate_dataset = concatenate_datasets(calibrate_dataset).shuffle(seed=42).select(range(args.num_calibration_samples))
+    if args.calibration_dataset_choice != "original":
+        if args.calibration_dataset_choice == "japanese":
+            calib_dataset = load_dataset(
+                "japanese-asr/ja_asr.jsut_basic5000",
+                "default",
+                split="test",
+                streaming=False,
+                token=True,
+            )
+        elif args.calibration_dataset_choice == "german":
+            calib_dataset = load_dataset(
+                "facebook/multilingual_librispeech",
+                "german",
+                split="test",
+                streaming=False,
+                token=True,
+            )
+        elif args.calibration_dataset_choice == "french":
+            calib_dataset = load_dataset(
+                "facebook/multilingual_librispeech",
+                "french",
+                split="test",
+                streaming=False,
+                token=True,
+            )
+        elif args.calibration_dataset_choice == "clean":
+            calib_dataset = load_dataset(
+                "hf-audio/esb-datasets-test-only-sorted",
+                "librispeech",
+                split="test.clean",
+                streaming=False,
+                token=True,
+            )
+        elif args.calibration_dataset_choice == "noisy":
+            calib_dataset = load_dataset(
+                "hf-audio/esb-datasets-test-only-sorted",
+                "ami",
+                split="test",
+                streaming=False,
+                token=True,
+            )
+        else:
+            raise ValueError("Invalid calibration dataset choice")
+        calib_dataset = calib_dataset.shuffle(seed=42)
+        calib_dataset = data_utils.prepare_data(calib_dataset)
+        calibrate_dataset = calib_dataset.select(range(
+            args.max_eval_samples, 
+            args.max_eval_samples + args.num_calibration_samples,
+        ))
+    else:
+        calibrate_dataset = concatenate_datasets(calibrate_dataset).shuffle(seed=42).select(range(args.num_calibration_samples))
 
     if args.low_rank:
         model = apply_low_rank(model, calibrate_dataset, args.rank_threshold)
@@ -207,6 +257,33 @@ def main(args):
     
     print(f"Number of parameters in encoder: {sum(p.numel() for p in model.encoder.parameters())}")
 
+    if args.quantize:
+        # Simulate int8 quantization by converting weights to int8 and back to float16
+        def simulate_int8_quantization(module):
+            for name, param in module.named_parameters():
+                if 'weight' in name or 'bias' in name:
+                    # Store original data type
+                    orig_dtype = param.data.dtype
+                    
+                    # Calculate scaling factor for quantization
+                    # Find the absolute max value to determine the scale
+                    abs_max = torch.max(torch.abs(param.data)).item()
+                    scale = 127.0 / (abs_max + 1e-6)  # Scale to fit in int8 range (-127 to 127)
+                    
+                    # Quantize to int8
+                    param_int8 = torch.round(param.data * scale).to(torch.int8)
+                    
+                    # Dequantize back to original precision (float16)
+                    param.data = (param_int8.float() / scale).to(orig_dtype)
+                    
+                    print(f"Quantized {name}: original max={abs_max:.4f}, scale={scale:.4f}")
+        
+        # Apply quantization to all modules in the model
+        print("Simulating int8 quantization...")
+        model.apply(simulate_int8_quantization)
+        
+        print("Quantized model:", model)
+
     if not args.do_eval:
         return
 
@@ -214,7 +291,7 @@ def main(args):
     for i_bench, dataset in enumerate(eval_dataset_list):
         sum_wer = 0
         wer_metric = evaluate.load("wer")
-        for i in range(len(dataset)):
+        for i in tqdm.tqdm(range(len(dataset))):
             audio = dataset[i]["audio"]["array"].astype(np.float32)
 
             pred = transcribe(model, audio)
@@ -274,6 +351,18 @@ if __name__ == "__main__":
         "--do_eval",
         action="store_true",
         help="Whether to evaluate the model",
+    )
+    parser.add_argument(
+        "--calibration_dataset_choice",
+        type=str, 
+        choices=["original", "japanese", "german", "french", "clean", "noisy"],
+        default="original",
+        help="Whether to use japanese-asr/ja_asr.jsut_basic5000 dataset for calibration instead of ESB benchmarks",
+    )
+    parser.add_argument(
+        "--quantize",
+        action="store_true",
+        help="Whether to INT8 quantize the model",
     )
     args = parser.parse_args()
 
