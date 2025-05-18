@@ -1,11 +1,33 @@
 import argparse
-import numpy as np 
+import numpy as np
 import torch
 import evaluate
 from normalizer import data_utils
 import tqdm
 import whisper
 from datasets import load_dataset, concatenate_datasets
+import numpy as np
+
+from run import convert_from_hf_whisper
+
+# random seed for np 
+np.random.seed(42)
+
+def compute_snr(clean, noisy):
+    """Compute SNR in dB between clean and noisy signals (1D numpy arrays)."""
+    clean = np.asarray(clean)
+    noisy = np.asarray(noisy)
+    noise = noisy - clean
+    signal_power = np.mean(clean ** 2)
+    noise_power = np.mean(noise ** 2)
+    if noise_power == 0:
+        return float('inf')
+    return 10 * np.log10(signal_power / noise_power)
+
+def add_gaussian_noise(audio, noise_std):
+    """Add Gaussian white noise to audio with specified std deviation."""
+    noise = np.random.normal(0, noise_std, size=audio.shape)
+    return audio + noise
 
 wer_metric = evaluate.load("wer")
 torch.set_float32_matmul_precision('high')
@@ -155,17 +177,36 @@ def apply_low_rank(model, dataset, rank_threshold):
 def main(args):
     model = whisper.load_model(args.base_model)
 
+    # Load pre-compressed model weights from Hugging Face model path if provided
+    if getattr(args, "hf_model_path", None):
+        from transformers import AutoModel
+        new_model = AutoModel.from_pretrained(
+            args.hf_model_path,
+            trust_remote_code=True, 
+            torch_dtype=torch.float16,
+        )
+        new_model = new_model.model 
+        new_model = convert_from_hf_whisper(
+            new_model,
+            device="cuda",
+            use_custom_kernel=False,
+        )
+        new_model = new_model.to(torch.float16).cuda()
+        new_model.is_calibrating = False
+        new_model.transcribe = model.transcribe
+        model = new_model
+
     eval_dataset_list = []
     calibrate_dataset = []
     benchs = [
-        "voxpopuli", 
-        "ami", 
-        "earnings22", 
-        "gigaspeech", 
+        # "voxpopuli", 
+        # "ami", 
+        # "earnings22", 
+        # "gigaspeech", 
         "librispeech:test.clean", 
-        "librispeech:test.other", 
-        "spgispeech", 
-        "tedlium",
+        # "librispeech:test.other", 
+        # "spgispeech", 
+        # "tedlium",
     ]
 
     # prepare calibration and test datasets from ESB benchmarks
@@ -199,6 +240,21 @@ def main(args):
     
     calibrate_dataset = concatenate_datasets(calibrate_dataset).shuffle(seed=42).select(range(args.num_calibration_samples))
 
+    # Add noise and compute SNR for calibration dataset
+    if getattr(args, "noise_std", 0.0) > 0:
+        def add_noise_and_snr(batch):
+            clean = batch["audio"]["array"].astype(np.float32)
+            noisy = add_gaussian_noise(clean, args.noise_std)
+            snr = compute_snr(clean, noisy)
+            return {"audio": {"array": noisy, "sampling_rate": batch["audio"]["sampling_rate"]}, "snr": snr}
+        calibrate_dataset = calibrate_dataset.map(add_noise_and_snr)
+        print("Added Gaussian noise to calibration dataset with std:", args.noise_std)
+        for i in range(min(5, len(calibrate_dataset))):
+            print(f"Calibration sample {i} SNR: {calibrate_dataset[i]['snr']:.2f} dB")
+    else:
+        # If no noise, set SNR to inf for all
+        calibrate_dataset = calibrate_dataset.map(lambda batch: {**batch, "snr": float('inf')})
+
     if args.low_rank:
         model = apply_low_rank(model, calibrate_dataset, args.rank_threshold)
 
@@ -213,10 +269,25 @@ def main(args):
     # accuracy benchmark
     total_sum_wer = 0
     for i_bench, dataset in enumerate(eval_dataset_list):
+        # Add noise and compute SNR for eval dataset
+        if getattr(args, "noise_std", 0.0) > 0:
+            def add_noise_and_snr_eval(batch):
+                clean = batch["audio"]["array"].astype(np.float32)
+                noisy = add_gaussian_noise(clean, args.noise_std)
+                snr = compute_snr(clean, noisy)
+                return {"audio": {"array": noisy, "sampling_rate": batch["audio"]["sampling_rate"]}, "snr": snr}
+            dataset = dataset.map(add_noise_and_snr_eval)
+            print(f"Added Gaussian noise to eval dataset {benchs[i_bench]} with std:", args.noise_std)
+        else:
+            dataset = dataset.map(lambda batch: {**batch, "snr": float('inf')})
+
         sum_wer = 0
+        sum_snr = 0
         wer_metric = evaluate.load("wer")
-        for i in range(len(dataset)):
+        for i in tqdm.tqdm(range(len(dataset))):
             audio = dataset[i]["audio"]["array"].astype(np.float32)
+            snr = dataset[i]["snr"]
+            print(f"SNR for sample {i} in {benchs[i_bench]}: {snr:.2f} dB (noise_std={args.noise_std})")
 
             pred = transcribe(model, audio)
             wer = wer_metric.compute(
@@ -224,6 +295,7 @@ def main(args):
             )
             wer = round(100 * wer, 2)
             sum_wer += wer
+            sum_snr += snr
             # print("WER:", wer, "%")
         
         with open('output.txt', 'a') as f:
@@ -231,14 +303,15 @@ def main(args):
             f.write(str(args) + '\n')
             f.write(f"{benchs[i_bench]}\n")
             f.write(f"Average WER: {sum_wer / len(dataset)}\n")
+            f.write(f"Average SNR: {sum_snr / len(dataset)}\n")
             f.write("=====================================\n")
         total_sum_wer += sum_wer / len(dataset)
 
     total_avg_wer = total_sum_wer / len(eval_dataset_list)
     model_name = ('lite-' if args.low_rank else '') + 'whisper-' + args.base_model + ('-' + args.rank_threshold if args.low_rank else '')
-    with open('output.txt', 'a') as f:
-        f.write(f'Final model evaluation results:\n')
-        f.write(f'max_eval_samples:{args.max_eval_samples} | {model_name} | total_avg_wer: {total_avg_wer} | encoder_params: {sum(p.numel() for p in model.encoder.parameters())} | decoder_params: {sum(p.numel() for p in model.decoder.parameters())}\n')
+    # with open('output.txt', 'a') as f:
+    #     f.write(f'Final model evaluation results:\n')
+    #     f.write(f'max_eval_samples:{args.max_eval_samples} | {model_name} | total_avg_wer: {total_avg_wer} | encoder_params: {sum(p.numel() for p in model.encoder.parameters())} | decoder_params: {sum(p.numel() for p in model.decoder.parameters())}\n')
 
 
 
@@ -250,6 +323,12 @@ if __name__ == "__main__":
         type=str,
         default="large-v3",
         help="Base model name. *E.g.* `'large-v3'` for the Large v3 model, or `'turbo'` for the Turbo model."
+    )
+    parser.add_argument(
+        "--hf_model_path",
+        type=str,
+        default=None,
+        help="Path, directory, or Hugging Face repo id to pre-compressed model weights (supports .safetensors, sharded safetensors, or .bin). If provided, loads these weights after initializing the base model."
     )
     parser.add_argument(
         "--low_rank",
@@ -278,6 +357,12 @@ if __name__ == "__main__":
         "--save_weight",
         action="store_true",
         help="Whether to save the compressed weights",
+    )
+    parser.add_argument(
+        "--noise_std",
+        type=float,
+        default=0.0,
+        help="Standard deviation of Gaussian white noise to add to audio. 0.0 means no noise.",
     )
     parser.add_argument(
         "--do_eval",
